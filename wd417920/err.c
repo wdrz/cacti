@@ -36,11 +36,11 @@ void fatal(const char *fmt, ...) {
 }
 
 
-void* safe_malloc_help(size_t n, unsigned long line) {
+void* safe_malloc_help(size_t n, unsigned int line) {
     void* p = malloc(n);
     if (!p) {
         fprintf(stderr, "[%s:%ul] Out of memory (%ul bytes)\n",
-                __FILE__, line, (unsigned long) n);
+                __FILE__, line, n);
         exit(1);
     }
     return p;

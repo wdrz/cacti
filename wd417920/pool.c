@@ -13,9 +13,30 @@ typedef struct thread_pool_t {
 
 thread_pool TP;
 
-void worker(void* data) {
-    int id = *((int*) data);
-    free(data);
+int execute_spawn(computation_t *c) {
+    int err;
+    actor_id_t new_actor_id;
+
+    if ((err = new_actor(&new_actor_id, (role_t*)message.data)) != 0) {
+        return err;
+    }
+
+    message_t hello_message = {
+            .message_type = MSG_HELLO,
+            .nbytes = sizeof(actor_id_t),
+            .data = (void*) (intptr_t) actor_id_self()
+    };
+
+    return send_message(new_actor_id, hello_message);
+}
+
+/**
+ * The life of a thread.
+ * @param data     - number of this thread
+ * @return         NULL
+ */
+void *worker(void* data) {
+    int id = (int) data;
 
     pthread_t tid = pthread_self();
     TP.tid[id] = tid;
@@ -23,25 +44,24 @@ void worker(void* data) {
     computation c;
 
     while(1) {
-        //safe_lock(&TP->lock); // is it necessary??
-
-        /*while (!COM->pending)
-            if ((err = pthread_cond_wait(&TP->ready, &TP->lock)) != 0)
-                syserr(err, "cond wait failed");*/
-
         if (next_computation(&c) == -1) {
             break;
         }
 
+        switch (c.message->message_type) {
+            case MSG_SPAWN:
+                execute_spawn();
+                break;
 
-        //safe_unlock(&TP->lock); // is it necessary??
+            case MSG_GODIE:
+                say_goodbye(c.actor);
+                break;
 
-
-
-
-        (*(c.prompt))(c.stateptr, c.message->nbytes, c.message->data);
-
-        computation_ended(c.actor);
+            default:
+                (*(c.prompt))(c.stateptr, c.message->nbytes, c.message->data);
+                computation_ended(c.actor);
+                break;
+        }
     }
 }
 
@@ -49,51 +69,26 @@ void init_tp() {
     int i, err;
     pthread_attr_t attr;
 
-
-
     if ((err = pthread_attr_init(&attr)) != 0 )
         syserr(err, "attr_init");
 
     if ((err = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE)) != 0)
-        syserr(err, "setdetachstate");
+        syserr(err, "set detach state");
 
     TP.pool_working = 1;
     COM.pending = 0;
 
     // create threads
     for (i = 0; i < POOL_SIZE; ++i) {
-        int* id = (int*)safe_malloc(sizeof(int));
-        *id = i;
+        /*int* id = (int*)safe_malloc(sizeof(int));
+        *id = i;*/
 
-        if ((err = pthread_create(&TP->threads[i], &attr, &worker, id)) != 0) {
+        if ((err = pthread_create(&TP.tid[i], &attr, worker, (void*) i)) != 0) {
             syserr(err, "create");
         }
     }
 }
-
 /*
-void operate(actor_id_t actor, act_t prompt, void **stateptr, size_t nbytes, void *data) {
-    if ((err = pthread_mutex_lock(&TP->lock)) != 0) {
-        syserr(err, "lock failed");
-    }
-
-    COM.pending = 1;
-    COM.actor = actor;
-    COM.data = data;
-    COM.nbytes = nbytes;
-    COM.prompt = prompt;
-    COM.stateptr = stateptr;
-
-    if ((err = pthread_cond_signal(&TP->lock)) != 0) {
-        syserr(err, "cond signal failed");
-    }
-
-    if ((err = pthread_mutex_unlock(&TP->lock)) != 0) {
-        syserr(err, "unlock failed");
-    }
-}*/
-
-
 int interrupt_all() {
     int i, err;
     TP.pool_working = 0;
@@ -102,7 +97,7 @@ int interrupt_all() {
             syserr(err, "join failed");
         }
     }
-}
+}*/
 
 actor_id_t actor_id_self() {
     pthread_t tid = pthread_self();

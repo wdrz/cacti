@@ -12,14 +12,16 @@ typedef struct computation {
     message_t *message;
 } computation_t;
 
-extern int init_messages(actor_id_t *actor, role_t *const role);
+extern int init_messages(actor_id_t *actor, role_t *role);
 
-extern int new_actor(actor_id_t *actor, role_t *const role);
+extern int new_actor(actor_id_t *actor, role_t *role);
 
-extern int add_message(actor_id_t actor, message_t message);
+extern int send_message(actor_id_t actor, message_t message);
 
-extern computation_t* next_computation();
+extern int next_computation(computation_t* c);
 
 extern void computation_ended(actor_id_t actor);
+
+extern int say_goodbye(actor_id_t actor);
 
 #endif //MESSAGES_H

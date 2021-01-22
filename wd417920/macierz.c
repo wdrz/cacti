@@ -283,13 +283,13 @@ int main() {
 
     const int action_size = 3;
     act_t actions[] = {
-            &callback_hello,
-            &callback_init,
-            &callback_hi_back,
-            &callback_ready,
-            &callback_setstate,
-            &callback_computation,
-            &callback_free
+            callback_hello,
+            callback_init,
+            callback_hi_back,
+            callback_ready,
+            callback_setstate,
+            callback_computation,
+            callback_free
     };
 
     /* * * * * * * * * * *
@@ -301,7 +301,7 @@ int main() {
             .prompts = actions
     };
 
-    int result[k];
+    volatile int result[k];
 
     actor_state_t first_actor_state = {
         .column_number = n - 1,
@@ -329,6 +329,11 @@ int main() {
         syserr(err, "send_message INIT failed");
     }
 
+    actor_system_join(first_actor);
+
+    for (i = 0; i < k; i++) {
+        printf("%d ", result[i]);
+    }
 
 
 	return 0;
