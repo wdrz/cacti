@@ -1,16 +1,19 @@
 #include <pthread.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 #include "blocking_queue.h"
 #include "err.h"
 
 blocking_queue_t* blocking_queue_init() {
-    blocking_queue_t *bq = safe_malloc(sizeof(blocking_queue_t));
-
     int err;
+    blocking_queue_t *bq = malloc(sizeof(blocking_queue_t));
+    if (bq == NULL) return NULL;
+
     // init mutex
     if ((err = pthread_mutex_init(&bq->lock, 0)) != 0)
         syserr(err, "mutex init failed");
-    if ((err = pthread_cond_init(&bq->ready_threads, 0)) != 0)
+    if ((err = pthread_cond_init(&bq->ready, 0)) != 0)
         syserr(err, "cond init failed");
 
     bq->len = 0;
@@ -21,10 +24,12 @@ blocking_queue_t* blocking_queue_init() {
     return bq;
 }
 
-void blocking_queue_push(blocking_queue_t *bq, actor_id_t id) {
+int blocking_queue_push(blocking_queue_t *bq, actor_id_t id) {
     int err;
 
-    blocking_entry_t *new_entry = (blocking_entry_t*) safe_malloc(sizeof(blocking_entry_t));
+    blocking_entry_t *new_entry = malloc(sizeof(blocking_entry_t));
+    if (new_entry == NULL) return -1;
+
     new_entry->data = id;
     new_entry->prev = NULL;
 
@@ -40,53 +45,54 @@ void blocking_queue_push(blocking_queue_t *bq, actor_id_t id) {
     bq->back = new_entry;
 
     if (bq->len == 0)
-        if ((err = pthread_cond_signal(&bq->lock)) != 0) // if no thread waits then nothing happens
+        if ((err = pthread_cond_signal(&bq->ready)) != 0) // if no thread waits then nothing happens
             syserr(err, "cond signal failed");
 
     bq->len++;
-
     safe_unlock(&bq->lock);
+
+    return 0;
 }
 
 /// returns -1 if queue was interrupted
-actor_id_t blocking_queue_pop(blocking_queue_t *bq) {
+int blocking_queue_pop(blocking_queue_t *bq, actor_id_t *actor) {
     int err;
-    blocking_entry_t *pop;
+    blocking_entry_t* volatile pop;
     actor_id_t res;
 
     safe_lock(&bq->lock);
 
-    while (bq->len == 0 && interrupted != 1)
+    while (bq->len == 0 && bq->interrupted != 1)
         if ((err = pthread_cond_wait(&bq->ready, &bq->lock)) != 0)
             syserr(err, "cond wait failed");
 
-    pop = bq->front;
-
-    if (pop != NULL) {
-        res = pop->data;
-        bq->front = pop->prev;
-
-        free(pop);
-
-        bq->len--;
-
+    if (bq->interrupted == 1) {
         safe_unlock(&bq->lock);
-        return res;
+        return -1;
     }
 
+    pop = bq->front;
+    res = pop->data;
+    bq->front = pop->prev;
+
+    free(pop);
+
+    bq->len--;
+
     safe_unlock(&bq->lock);
-    return -1;
+    *actor = res;
+    return 0;
 
 }
 
 void blocking_queue_signal_all(blocking_queue_t *bq) {
-    int err = 0;
+    int err;
     safe_lock(&bq->lock);
 
     bq->interrupted = 1;
 
-    if ((err = pthread_cond_broadcast(&bq->lock)) != 0)
-        syserr(err, "cond wait failed");
+    if ((err = pthread_cond_broadcast(&bq->ready)) != 0)
+        syserr(err, "cond broadcast failed");
 
     safe_unlock(&bq->lock);
 

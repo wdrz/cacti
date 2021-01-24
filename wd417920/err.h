@@ -11,7 +11,7 @@ extern void syserr(int e, const char *fmt, ...);
 /* wypisuje informacje o bledzie i konczy dzialanie */
 extern void fatal(const char *fmt, ...);
 
-extern void* safe_malloc_help(size_t n, unsigned long line);
+extern void* safe_malloc_help(int n, int line);
 
 #define safe_malloc(n) safe_malloc_help(n, __LINE__)
 

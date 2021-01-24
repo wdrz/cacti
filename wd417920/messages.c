@@ -1,10 +1,9 @@
 #include <stdlib.h>
-#include <stdio.h>
 #include <pthread.h>
+#include <string.h>
 
 #include "messages.h"
 #include "err.h"
-#include "cacti.h"
 #include "queue.h"
 #include "blocking_queue.h"
 
@@ -12,14 +11,14 @@
  * A representation of a single actor
  */
 typedef struct actor {
-    const role_t *role;          ///< array of callbacks
-    queue_t *messages;           ///< queue of messages
+    role_t *role;          ///< array of callbacks
+    queue_t* volatile messages;           ///< queue of messages
     pthread_mutex_t lock;        ///< a mutex associated with this actor
 
     int processed_now;           ///< 0 if an actor callback has been invoked on a thread
-    volatile void ** stateptr;             ///< a state of an actor
+    void ** stateptr;             ///< a state of an actor
 
-    volatile int dead;           ///< 1 if actor processed MSG_GODIE, 0 o/w
+    //volatile int dead;         ///< 1 if actor processed MSG_GODIE, 0 o/w
     volatile int goodbye;        ///< 1 if actor is dead or its queue of messages contains MSQ_GODIE, 0 o/w
 } actor_t;
 
@@ -27,13 +26,13 @@ typedef struct actor {
  * A representation of system of actors
  */
 typedef struct actors {
-    pthread_mutex_t lock;            ///< a mutex associated with the system
-    volatile int num;                         ///< number of actors in the system
-    actor_t** volatile actors;                ///< dynamic array of pointers to actors
-    volatile int capacity;                    ///< space allocated for actors array
-    blocking_queue_t* volatile waiting;       ///< a blocking queue of actors that have pending messages
-    volatile int n_processed_now;             ///< number of actors processed by the thread pool at the moment
-    volatile int n_dead;                      ///< number of dead actors
+    pthread_mutex_t lock;                    ///< a mutex associated with the system
+    volatile int num;                        ///< number of actors in the system
+    actor_t** volatile actors;               ///< dynamic array of pointers to actors
+    volatile int capacity;                   ///< space allocated for actors array
+    blocking_queue_t* volatile waiting;      ///< a blocking queue of actors that have pending messages
+    volatile int n_processed_now;            ///< number of actors processed by the thread pool at the moment
+    volatile int n_dead;                     ///< number of dead actors
 } actors_t;
 
 static actors_t AC; ///< The system of actors
@@ -44,6 +43,7 @@ static actors_t AC; ///< The system of actors
  * @return          pointer to a new actor
  */
 static actor_t* generate_actor(role_t *const role) {
+    int err;
 
     actor_t* created_actor = safe_malloc(sizeof(actor_t));
 
@@ -51,7 +51,7 @@ static actor_t* generate_actor(role_t *const role) {
     created_actor->messages      = queue_init();
     created_actor->processed_now = 0;
     created_actor->goodbye       = 0;
-    created_actor->dead          = 0;
+    //created_actor->dead          = 0;
     created_actor->stateptr      = malloc(sizeof(void*));
 
     if ((err = pthread_mutex_init(&created_actor->lock, 0)) != 0)
@@ -67,6 +67,7 @@ static actor_t* generate_actor(role_t *const role) {
  * @return          0 if operation is successful, -1 o/w
  */
 int init_actors_system(actor_id_t *actor, role_t *const role) {
+    int err;
     AC.num              = 1;
     AC.n_processed_now  = 0;
     AC.n_dead           = 0;
@@ -110,8 +111,8 @@ int new_actor(actor_id_t *actor, role_t *const role) {
  * @param actor_temp    a pointer to actor id (input parameter)
  * @return              0 if actor is not processed right now, but does have some pending messages
  */
-inline int is_actor_queued(actor_t* actor_temp) {
-    return actor_temp->processed_now == 0 && !queue_empty(actor_temp->messages);
+static inline int is_actor_queued(actor_t* actor_temp) {
+    return actor_temp->processed_now == 0 && queue_empty(actor_temp->messages) == 0;
 }
 
 /**
@@ -136,11 +137,16 @@ int send_message(actor_id_t actor, message_t message) {
         return -1;
     }
 
-    queue_push(actor_temp->messages, (void *) message);
+    queue_push(actor_temp->messages, message);
 
     if (!is_actor_queued(actor_temp)) {
         blocking_queue_push(AC.waiting, actor); // this queue is synchronised
     }
+
+    if (message.message_type == MSG_GODIE) {
+        actor_temp->goodbye = 1;
+    }
+
     safe_unlock(&actor_temp->lock); // actor unlock
     return 0;
 }
@@ -149,13 +155,17 @@ int send_message(actor_id_t actor, message_t message) {
  * TODO: NOT SURE IF NECESSARY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
  * @return TODO: modify this function
  */
-static int check_if_actors_finished_n_handle() {
-    int res;
+/*static int check_if_actors_finished_n_handle() {
     safe_lock(&AC.lock);
-    res = (AC.num == AC.n_dead);
+    if (AC.num == AC.n_dead) {
+        blocking_queue_signal_all(AC.waiting);
+
+        safe_unlock(&AC.lock);
+        return 1;
+    }
     safe_unlock(&AC.lock);
-    return res;
-}
+    return 0;
+}*/
 
 
 /**
@@ -216,44 +226,49 @@ void computation_ended(actor_id_t actor) {
  * @return               - 0 if a next computation has been returned, -1 if all actors are done.
  */
 int next_computation(computation_t *result) {
-    check_if_actors_finished_n_handle();
-
     actor_id_t actor_id;
     if (blocking_queue_pop(AC.waiting, &actor_id) != 0) { // blocking instruction
         return -1;
     }
 
-    safe_lock(&AC.lock); // system lock
+    // Computations shall continue
+
     actor_t *actor_temp = AC.actors[actor_id];
-    AC.n_processed_now++;
-    safe_unlock(&AC.lock); // system unlock
 
     safe_lock(&actor_temp->lock); // actor lock
 
-    result->message = (message_t*) queue_pop(actor_temp->messages);
-    actor_temp->processed_now = 1;
-    result->actor = id;
-    result->stateptr = actor_temp->stateptr;
-    result->prompt = actor_temp->role.prompts[ result->message->message_type ];
+    computation_t result_cpy = {
+            .prompt = actor_temp->role->prompts[ result->message.message_type ],
+            .actor = actor_id,
+            .stateptr = actor_temp->stateptr,
+            .message = queue_pop(actor_temp->messages)
+    };
+    memcpy(result, &result_cpy, sizeof(computation_t));
 
+    actor_temp->processed_now = 1;
     safe_unlock(&actor_temp->lock); // actor unlock
+
+    safe_lock(&AC.lock); // system lock
+    AC.n_processed_now++;
+    safe_unlock(&AC.lock); // system unlock
+    return 0;
 }
 
-
-int say_goodbye(actor_id_t actor_id) {
+/**
+ *
+ * @param actor_id
+ * @return             -1 if all actors are dead, 0 o/w.
+ */
+int kill_actor() {
     safe_lock(&AC.lock); // system lock
     AC.n_dead++;
     if (AC.n_dead == AC.num) {
-
+        blocking_queue_signal_all(AC.waiting);
+        safe_unlock(&AC.lock); // system unlock
+        return -1;
     }
 
-    actor_t *actor = AC.actors[actor_id];
-
-
-
     safe_unlock(&AC.lock); // system unlock
-
-    AC.actors[actor_id]->goodbye = 1;
     return 0;
 }
 

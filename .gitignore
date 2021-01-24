@@ -3,3 +3,5 @@
 .idea/
 *.exe
 */*-debug/*
+build/
+*.exe*

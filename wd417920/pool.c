@@ -9,11 +9,17 @@
 
 typedef struct thread_pool_t {
     pthread_t tid[POOL_SIZE];
+    pthread_mutex_t lock;
+    int ended;
 } thread_pool;
 
-thread_pool TP;
+thread_pool TP; ///< System's thread pool
 
-int execute_spawn(computation_t *c) {
+/**
+ * Calls new_actor function and sends MSG_HELLO to the new actor
+ * @return 0 on success, -1 on failure
+ */
+int execute_spawn(message_t message) {
     int err;
     actor_id_t new_actor_id;
 
@@ -36,33 +42,43 @@ int execute_spawn(computation_t *c) {
  * @return         NULL
  */
 void *worker(void* data) {
-    int id = (int) data;
+    int id = *(int*) data;
+    free(data);
 
     pthread_t tid = pthread_self();
     TP.tid[id] = tid;
 
-    computation c;
+    computation_t c;
 
-    while(1) {
+    while (1) {
         if (next_computation(&c) == -1) {
             break;
         }
 
-        switch (c.message->message_type) {
+        switch (c.message.message_type) {
             case MSG_SPAWN:
-                execute_spawn();
+                execute_spawn(c.message);
                 break;
 
             case MSG_GODIE:
-                say_goodbye(c.actor);
+                kill_actor();
                 break;
 
             default:
-                (*(c.prompt))(c.stateptr, c.message->nbytes, c.message->data);
+                (*(c.prompt))(c.stateptr, c.message.nbytes, c.message.data);
                 computation_ended(c.actor);
                 break;
         }
     }
+    safe_lock(&TP.lock);
+    TP.ended++;
+    if (TP.ended == POOL_SIZE) {
+        // last thread, must clean the system
+
+
+    }
+    safe_unlock(&TP.lock);
+    return NULL;
 }
 
 void init_tp() {
@@ -75,15 +91,16 @@ void init_tp() {
     if ((err = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE)) != 0)
         syserr(err, "set detach state");
 
-    TP.pool_working = 1;
-    COM.pending = 0;
+    TP.ended    = 0;
+    if ((err = pthread_mutex_init(&TP.lock, 0)) != 0)
+        syserr(err, "mutex init failed");
 
     // create threads
+    int* t_num;
     for (i = 0; i < POOL_SIZE; ++i) {
-        /*int* id = (int*)safe_malloc(sizeof(int));
-        *id = i;*/
-
-        if ((err = pthread_create(&TP.tid[i], &attr, worker, (void*) i)) != 0) {
+        t_num = safe_malloc(sizeof(int));
+        *t_num = i;
+        if ((err = pthread_create(&TP.tid[i], &attr, worker, (void*) t_num)) != 0) {
             syserr(err, "create");
         }
     }

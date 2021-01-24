@@ -15,16 +15,18 @@ queue_t* queue_init() {
     return q;
 }
 
-int empty(queue_t* q) {
+int queue_empty(queue_t* q) {
   return q->len == 0;
 }
 
-void queue_push(queue_t* q, void* data) {
-    entry_t *entry = (entry_t*) safe_malloc(sizeof(entry_t));
+int queue_push(queue_t* q, content_t data) {
+    entry_t *entry = malloc(sizeof(entry_t));
+    if (entry == NULL) return -1;
+
     entry->data = data;
     entry->prev = NULL;
 
-    if (empty(q)) {
+    if (queue_empty(q)) {
         q->front = entry;
     } else {
         q->back->prev = entry;
@@ -32,26 +34,27 @@ void queue_push(queue_t* q, void* data) {
 
     q->back = entry;
     q->len++;
+    return 0;
 }
 
-/** Returns null pointer if queue is empty */
-void* queue_pop(queue_t* q) {
-    if (empty(q)) {
-        return NULL;
+/** queue must not be empty */
+content_t queue_pop(queue_t* q) {
+    if (queue_empty(q)) {
+        fatal("queue is empty");
     }
     entry_t *entry = q->front;
-    void *res = entry->data;
+    content_t res = entry->data;
     q->front = entry->prev;
     free(entry);
-
+    q->len--;
     return res;
 }
 
 int queue_destroy(queue_t* q) {
-    if (empty(q)) {
+    if (queue_empty(q)) {
         free(q);
         return 0;
     }
 
-    return 1;
+    return -1;
 }

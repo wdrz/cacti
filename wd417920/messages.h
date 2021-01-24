@@ -7,12 +7,12 @@ typedef struct computation {
     actor_id_t actor;
 
     act_t prompt;
-    void **stateptr;
+    void ** stateptr;
 
-    message_t *message;
+    message_t message;
 } computation_t;
 
-extern int init_messages(actor_id_t *actor, role_t *role);
+extern int init_actors_system(actor_id_t *actor, role_t *role);
 
 extern int new_actor(actor_id_t *actor, role_t *role);
 
@@ -22,6 +22,6 @@ extern int next_computation(computation_t* c);
 
 extern void computation_ended(actor_id_t actor);
 
-extern int say_goodbye(actor_id_t actor);
+extern int kill_actor();
 
 #endif //MESSAGES_H

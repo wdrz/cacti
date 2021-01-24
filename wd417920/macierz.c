@@ -27,7 +27,7 @@ typedef struct actor_state {
     int *times;
     int *cells;
     int n_rows;
-    int *result;                 // used only by first actor
+    volatile int *result;        // used only by first actor
     role_t *role;                // used only by first actor
     int n_actors_curr;           // used only by first actor
     int n_actors_ready;          // used only by first actor
@@ -193,7 +193,7 @@ void callback_setstate(void **stateptr, size_t nbytes, void *data) {
 void callback_computation(void **stateptr, size_t nbytes, void *data) {
     UNUSED_PARAMETER(nbytes);
 
-    int err, i;
+    int err;
     partial_t *results = (partial_t*) data;
     actor_state_t *state = *stateptr;
     int cell = results->row * state->n_rows + state->column_number;
