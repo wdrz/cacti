@@ -11,13 +11,11 @@
  * A representation of a single actor
  */
 typedef struct actor {
-    role_t *role;          ///< array of callbacks
-    queue_t* volatile messages;           ///< queue of messages
+    role_t *role;                ///< array of callbacks
+    queue_t* volatile messages;  ///< queue of messages
     pthread_mutex_t lock;        ///< a mutex associated with this actor
-
-    int processed_now;           ///< 0 if an actor callback has been invoked on a thread
-    void ** stateptr;             ///< a state of an actor
-
+    volatile int processed_now;           ///< 0 if an actor callback has been invoked on a thread
+    void ** stateptr;            ///< a state of an actor
     //volatile int dead;         ///< 1 if actor processed MSG_GODIE, 0 o/w
     volatile int goodbye;        ///< 1 if actor is dead or its queue of messages contains MSQ_GODIE, 0 o/w
 } actor_t;
@@ -77,8 +75,6 @@ int init_actors_system(actor_id_t *actor, role_t *const role) {
     AC.actors[0]        = generate_actor(role);
     *actor              = 0;
 
-    blocking_queue_push(AC.waiting, 0);
-
     if ((err = pthread_mutex_init(&AC.lock, 0)) != 0)
         syserr(err, "mutex init failed");
 
@@ -122,8 +118,15 @@ static inline int is_actor_queued(actor_t* actor_temp) {
  * @return              -2 if actor is incorrect, -1 if actor does not accept messages, 0 o/w
  */
 int send_message(actor_id_t actor, message_t message) {
+
+    int add_to_queue;
     safe_lock(&AC.lock); // system lock
+    fprintf(stdout, "\033[0;31msend_message to %ld (%ld) \033[0m \n", actor, message.message_type);
+
     if (actor >= AC.num || actor < 0) {
+        // TODO: delete this fatal
+        fprintf(stdout, "out of range  \n");
+        // fatal("send_message -2");
         safe_unlock(&AC.lock); // system unlock
         return -2;
     }
@@ -132,22 +135,27 @@ int send_message(actor_id_t actor, message_t message) {
 
     safe_lock(&actor_temp->lock); // actor lock
 
+
+
     if (actor_temp->goodbye == 1) {
         safe_unlock(&actor_temp->lock); // actor unlock
         return -1;
     }
 
+    add_to_queue = !actor_temp->processed_now
+            && queue_empty(actor_temp->messages);
     queue_push(actor_temp->messages, message);
-
-    if (!is_actor_queued(actor_temp)) {
-        blocking_queue_push(AC.waiting, actor); // this queue is synchronised
-    }
 
     if (message.message_type == MSG_GODIE) {
         actor_temp->goodbye = 1;
     }
 
     safe_unlock(&actor_temp->lock); // actor unlock
+
+    if (add_to_queue) {
+        blocking_queue_push(AC.waiting, actor); // this queue is synchronised
+    }
+
     return 0;
 }
 
@@ -201,19 +209,22 @@ int send_message(actor_id_t actor, message_t message) {
  * @param actor    - id of an actor that was being processed by a calling thread up until now
  */
 void computation_ended(actor_id_t actor) {
-    int is_queued;
+
+    int add_to_bq;
 
     safe_lock(&AC.lock); // system lock
+    fprintf(stdout, "computation_ended %ld \n", actor);
+
     actor_t* actor_temp = AC.actors[actor];
     AC.n_processed_now--;
     safe_unlock(&AC.lock); // system unlock
 
     safe_lock(&actor_temp->lock); // actor lock
-    is_queued = is_actor_queued(actor_temp);
     actor_temp->processed_now = 0;
-    safe_unlock(&(actor_temp->lock)); // actor unlock
+    add_to_bq = !queue_empty(actor_temp->messages);
+    safe_unlock(&actor_temp->lock); // actor unlock
 
-    if (!is_queued) {
+    if (add_to_bq) {
         blocking_queue_push(AC.waiting, actor); // this queue is synchronised
     }
 
@@ -226,24 +237,35 @@ void computation_ended(actor_id_t actor) {
  * @return               - 0 if a next computation has been returned, -1 if all actors are done.
  */
 int next_computation(computation_t *result) {
+    //fprintf(stdout, "next_computation  \n");
     actor_id_t actor_id;
     if (blocking_queue_pop(AC.waiting, &actor_id) != 0) { // blocking instruction
         return -1;
     }
 
     // Computations shall continue
+    fprintf(stdout, "next_computation continues: %ld \n", actor_id);
 
-    actor_t *actor_temp = AC.actors[actor_id];
+    actor_t *actor_temp = AC.actors[actor_id]; // does not need to be synchronised
 
     safe_lock(&actor_temp->lock); // actor lock
 
+    /// TODO: THIS IS A DEBUG
+    if (queue_empty(actor_temp->messages)) {
+        fprintf(stdout, "Something is wrong: %ld \n", actor_id);
+    }
+
+    message_t message = queue_pop(actor_temp->messages);
     computation_t result_cpy = {
-            .prompt = actor_temp->role->prompts[ result->message.message_type ],
-            .actor = actor_id,
-            .stateptr = actor_temp->stateptr,
-            .message = queue_pop(actor_temp->messages)
+            .prompt     = ((unsigned long)message.message_type >= actor_temp->role->nprompts) ?
+                NULL : actor_temp->role->prompts[ message.message_type ],
+            .actor      = actor_id,
+            .stateptr   = actor_temp->stateptr,
+            .message    = message
     };
     memcpy(result, &result_cpy, sizeof(computation_t));
+
+    //fprintf(stdout, "NC type: %ld \n", result_cpy.message.message_type);
 
     actor_temp->processed_now = 1;
     safe_unlock(&actor_temp->lock); // actor unlock

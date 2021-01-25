@@ -18,7 +18,6 @@
 
 
 
-
 typedef struct actor_state {
     int column_number;
     actor_id_t actor_id_prev;
@@ -29,7 +28,7 @@ typedef struct actor_state {
     int n_rows;
     volatile int *result;        // used only by first actor
     role_t *role;                // used only by first actor
-    int n_actors_curr;           // used only by first actor
+    int column_helper;           // used only by first actor
     int n_actors_ready;          // used only by first actor
     int n_rows_counted;          // used only by first actor
 } actor_state_t;
@@ -54,6 +53,9 @@ void callback_hello(void **stateptr, size_t nbytes, void *data) {
     int err;
     actor_id_t parent = (actor_id_t) data;
 
+    //fprintf (stdout, "HELLO MESSAGE RECEIVED: %ld \n", parent);
+    fprintf (stdout, ">>>  %ld  <<< \n", parent);
+    fprintf (stdout, "SEND HIBACK : %ld \n", actor_id_self());
     message_t message_hi_back = {
             .message_type = MSG_HI_BACK,
             .nbytes = 0, // irrelevant
@@ -74,12 +76,14 @@ void callback_hello(void **stateptr, size_t nbytes, void *data) {
  */
 void callback_init(void **stateptr, size_t nbytes, void *data) {
     UNUSED_PARAMETER(nbytes);
+
+    //fprintf(stdout, "init callback");
     int err, i;
     *stateptr = data;
 
     actor_state_t state = **(actor_state_t**) stateptr;
 
-    for (i = 0; i < state.n_actors_system; i++) {
+    for (i = 0; i < state.n_actors_system - 1; ++i) {
         message_t message_spawn = {
                 .message_type = MSG_SPAWN,
                 .nbytes = 0, // irrelevant
@@ -106,19 +110,21 @@ void callback_hi_back(void **stateptr, size_t nbytes, void *data) {
     int err;
     actor_id_t child = (actor_id_t) data;
 
+
+    fprintf(stdout, "HIBACK %ld", child);
+
     actor_state_t *state = *stateptr;
     actor_state_t *child_state = safe_malloc(sizeof(actor_state_t));
     *child_state = *state; // shallow copy
 
     state->actor_id_prev = child;
 
-    state->n_actors_curr--;
-    child_state->column_number = state->n_actors_curr;
+    state->column_helper--;
+    child_state->column_number = state->column_helper;
 
     message_t message_setstate = {
-            .message_type = MSG_SETSTATE,
-            .nbytes = 0, // irrelevant
-            .data = (void*) state
+            .message_type   = MSG_SETSTATE,
+            .data           = child_state
     };
 
     if ((err = send_message(child, message_setstate)) != 0) {
@@ -178,6 +184,8 @@ void callback_setstate(void **stateptr, size_t nbytes, void *data) {
     actor_state_t *state = *stateptr;
     message_t message = { .message_type = MSG_READY };
 
+    fprintf(stdout, "SETSTATE: prev: %ld, curr: %ld \n", (**(actor_state_t **)stateptr).actor_id_prev, actor_id_self());
+
     if ((err = send_message(state->actor_id_first, message)) != 0) {
         syserr(err, "send_message READY failed");
     }
@@ -196,10 +204,15 @@ void callback_computation(void **stateptr, size_t nbytes, void *data) {
     int err;
     partial_t *results = (partial_t*) data;
     actor_state_t *state = *stateptr;
-    int cell = results->row * state->n_rows + state->column_number;
+    int cell = results->row * state->n_actors_system + state->column_number;
 
     sleep(state->times[ cell ]);
+
+    fprintf(stdout, "\033[0;33mCOMPUTATION: %ld, %d, %d, nkol: %d, nrow: %d \033[0m \n",
+            actor_id_self(), results->result, state->cells[ cell ], state->column_number, results->row);
     results->result += state->cells[ cell ];
+
+
 
     // if reached first actor again, stop computation.
     if (state->actor_id_first == actor_id_self()) {
@@ -243,6 +256,10 @@ void callback_free(void **stateptr, size_t nbytes, void *data) {
     int err;
     actor_state_t *state = *stateptr;
 
+    fprintf(stdout, "\033[0;32mCALLBACK FREE: first: %ld, curr: %ld, prev: %ld \033[0m \n",
+            state->actor_id_first, actor_id_self(), state->actor_id_prev);
+
+
     // Replicate message
     if (state->actor_id_first != actor_id_self()) {
         message_t message = { .message_type = MSG_FREE };
@@ -252,9 +269,17 @@ void callback_free(void **stateptr, size_t nbytes, void *data) {
         }
     }
 
+
+
     // Free resources
-    free(*stateptr);
+    if (state->actor_id_first != actor_id_self()) {
+        free(*stateptr); // first actor's state isn't allocated dynamically
+    }
     free(stateptr);
+
+
+    //fprintf(stdout, "\033[0;34mCALLBACK FREE: curr: %ld \033[0m \n",
+            //actor_id_self());
 
     // Send goodbye to itself
 
@@ -268,20 +293,20 @@ void callback_free(void **stateptr, size_t nbytes, void *data) {
 }
 
 int main() {
-    int n, k, i, j, err; // k - number of rows, n - number of columns
-    scanf("%d %d", &n, &k);
+    int k, n, i, j, err; // k - number of rows, n - number of columns
+    scanf("%d %d", &k, &n);
     int num[k * n];
     int time[k * n];
 
     for (i = 0; i < k; ++i) {
         for (j = 0; j < n; ++j) {
-            scanf("%d %d", num + i * k + j, time + i * k + j);
+            scanf("%d %d", num + i * n + j, time + i * n + j);
         }
     }
 
     actor_id_t first_actor;
 
-    const int action_size = 3;
+    const int action_size = 7;
     act_t actions[] = {
             callback_hello,
             callback_init,
@@ -301,6 +326,8 @@ int main() {
             .prompts = actions
     };
 
+    actor_system_create(&first_actor, &first_role);
+
     volatile int result[k];
 
     actor_state_t first_actor_state = {
@@ -313,7 +340,7 @@ int main() {
         .n_rows = k,
         .result = result,            // used only by first actor
         .role = &first_role,         // used only by first actor
-        .n_actors_curr = 1,          // used only by first actor
+        .column_helper = n - 1,      // used only by first actor
         .n_actors_ready = 1,         // used only by first actor
         .n_rows_counted = 0,         // used only by first actor
     };
@@ -323,7 +350,7 @@ int main() {
             .data = &first_actor_state
     };
 
-    actor_system_create(&first_actor, &first_role);
+
 
     if ((err = send_message(first_actor, message)) != 0) {
         syserr(err, "send_message INIT failed");

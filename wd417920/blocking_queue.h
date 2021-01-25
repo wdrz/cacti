@@ -7,8 +7,8 @@
 
 
 typedef struct blocking_entry {
-    actor_id_t data;
-    struct blocking_entry *prev;
+    volatile actor_id_t data;
+    struct blocking_entry* volatile prev;
 } blocking_entry_t;
 
 typedef struct blocking_queue {

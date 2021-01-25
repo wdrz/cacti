@@ -9,14 +9,14 @@
 typedef message_t content_t;
 
 typedef struct entry {
-    content_t data;
-    struct entry *prev;
+    volatile content_t data;
+    struct entry* volatile prev;
 } entry_t;
 
 typedef struct queue {
-    size_t len;
-    entry_t *back;
-    entry_t *front;
+    volatile size_t len;
+    entry_t* volatile back;
+    entry_t* volatile front;
 } queue_t;
 
 extern queue_t* queue_init();

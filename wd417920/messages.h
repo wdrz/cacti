@@ -24,4 +24,6 @@ extern void computation_ended(actor_id_t actor);
 
 extern int kill_actor();
 
+extern int messages_destroy();
+
 #endif //MESSAGES_H

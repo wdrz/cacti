@@ -49,6 +49,7 @@ int blocking_queue_push(blocking_queue_t *bq, actor_id_t id) {
             syserr(err, "cond signal failed");
 
     bq->len++;
+    fprintf(stdout,"BQ push: %ld\n", id);
     safe_unlock(&bq->lock);
 
     return 0;
@@ -78,7 +79,7 @@ int blocking_queue_pop(blocking_queue_t *bq, actor_id_t *actor) {
     free(pop);
 
     bq->len--;
-
+    fprintf(stdout,"BQ pop: %ld\n", res);
     safe_unlock(&bq->lock);
     *actor = res;
     return 0;
