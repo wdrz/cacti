@@ -1,7 +1,5 @@
 #include <stdio.h>
-#include <time.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <unistd.h>
 
 #include "cacti.h"
@@ -38,8 +36,6 @@ typedef struct partial {
     int row;
 } partial_t;
 
-
-
 /** Called when an actor receives HELLO message
  *
  * @param stateptr      a pointer to NULL. Function changes NULL to pointer to actor's state
@@ -53,9 +49,10 @@ void callback_hello(void **stateptr, size_t nbytes, void *data) {
     int err;
     actor_id_t parent = (actor_id_t) data;
 
-    //fprintf (stdout, "HELLO MESSAGE RECEIVED: %ld \n", parent);
-    fprintf (stdout, ">>>  %ld  <<< \n", parent);
+#ifdef DEBUG
     fprintf (stdout, "SEND HIBACK : %ld \n", actor_id_self());
+#endif
+
     message_t message_hi_back = {
             .message_type = MSG_HI_BACK,
             .nbytes = 0, // irrelevant
@@ -77,7 +74,6 @@ void callback_hello(void **stateptr, size_t nbytes, void *data) {
 void callback_init(void **stateptr, size_t nbytes, void *data) {
     UNUSED_PARAMETER(nbytes);
 
-    //fprintf(stdout, "init callback");
     int err, i;
     *stateptr = data;
 
@@ -110,8 +106,9 @@ void callback_hi_back(void **stateptr, size_t nbytes, void *data) {
     int err;
     actor_id_t child = (actor_id_t) data;
 
-
-    fprintf(stdout, "HIBACK %ld", child);
+#ifdef DEBUG
+    fprintf(stdout, "HIBACK %ld\n", child);
+#endif
 
     actor_state_t *state = *stateptr;
     actor_state_t *child_state = safe_malloc(sizeof(actor_state_t));
@@ -184,7 +181,9 @@ void callback_setstate(void **stateptr, size_t nbytes, void *data) {
     actor_state_t *state = *stateptr;
     message_t message = { .message_type = MSG_READY };
 
+#ifdef DEBUG
     fprintf(stdout, "SETSTATE: prev: %ld, curr: %ld \n", (**(actor_state_t **)stateptr).actor_id_prev, actor_id_self());
+#endif
 
     if ((err = send_message(state->actor_id_first, message)) != 0) {
         syserr(err, "send_message READY failed");
@@ -206,13 +205,15 @@ void callback_computation(void **stateptr, size_t nbytes, void *data) {
     actor_state_t *state = *stateptr;
     int cell = results->row * state->n_actors_system + state->column_number;
 
-    sleep(state->times[ cell ]);
+    // TODO: remove "* 500"
+    usleep(state->times[ cell ] * 1000 );
 
+#ifdef DEBUG
     fprintf(stdout, "\033[0;33mCOMPUTATION: %ld, %d, %d, nkol: %d, nrow: %d \033[0m \n",
             actor_id_self(), results->result, state->cells[ cell ], state->column_number, results->row);
+#endif
+
     results->result += state->cells[ cell ];
-
-
 
     // if reached first actor again, stop computation.
     if (state->actor_id_first == actor_id_self()) {
@@ -256,9 +257,10 @@ void callback_free(void **stateptr, size_t nbytes, void *data) {
     int err;
     actor_state_t *state = *stateptr;
 
+#ifdef DEBUG
     fprintf(stdout, "\033[0;32mCALLBACK FREE: first: %ld, curr: %ld, prev: %ld \033[0m \n",
             state->actor_id_first, actor_id_self(), state->actor_id_prev);
-
+#endif
 
     // Replicate message
     if (state->actor_id_first != actor_id_self()) {
@@ -269,17 +271,10 @@ void callback_free(void **stateptr, size_t nbytes, void *data) {
         }
     }
 
-
-
     // Free resources
     if (state->actor_id_first != actor_id_self()) {
         free(*stateptr); // first actor's state isn't allocated dynamically
     }
-    free(stateptr);
-
-
-    //fprintf(stdout, "\033[0;34mCALLBACK FREE: curr: %ld \033[0m \n",
-            //actor_id_self());
 
     // Send goodbye to itself
 
@@ -317,13 +312,24 @@ int main() {
             callback_free
     };
 
-    /* * * * * * * * * * *
-     *  First actor      *
-     * * * * * * * * * * */
+    act_t actions_first[] = {
+            NULL,
+            callback_init,
+            callback_hi_back,
+            callback_ready,
+            callback_setstate,
+            callback_computation,
+            callback_free
+    };
+
+    role_t role = {
+            .nprompts = action_size,
+            .prompts = actions
+    };
 
     role_t first_role = {
             .nprompts = action_size,
-            .prompts = actions
+            .prompts = actions_first
     };
 
     actor_system_create(&first_actor, &first_role);
@@ -339,7 +345,7 @@ int main() {
         .cells = num,
         .n_rows = k,
         .result = result,            // used only by first actor
-        .role = &first_role,         // used only by first actor
+        .role = &role,               // used only by first actor
         .column_helper = n - 1,      // used only by first actor
         .n_actors_ready = 1,         // used only by first actor
         .n_rows_counted = 0,         // used only by first actor
@@ -359,7 +365,7 @@ int main() {
     actor_system_join(first_actor);
 
     for (i = 0; i < k; i++) {
-        printf("%d ", result[i]);
+        printf("%d\n", result[i]);
     }
 
 

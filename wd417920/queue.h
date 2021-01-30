@@ -8,15 +8,12 @@
 
 typedef message_t content_t;
 
-typedef struct entry {
-    volatile content_t data;
-    struct entry* volatile prev;
-} entry_t;
-
 typedef struct queue {
     volatile size_t len;
-    entry_t* volatile back;
-    entry_t* volatile front;
+    volatile size_t capacity;
+    content_t* list;
+    size_t volatile back;
+    size_t volatile front;
 } queue_t;
 
 extern queue_t* queue_init();
